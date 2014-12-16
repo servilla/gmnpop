@@ -4,6 +4,7 @@
 """:Mod: pop
 
 :Synopsis:
+To populate PASTA GMN with legacy LTER Metacat DataONE MN objects.
 
 :Author:
   servilla
@@ -45,6 +46,9 @@ def main():
     pid_count = 0
     pids = {}
 
+    # Iterate through all object PIDs found on source MN and build dict based on scope.identifier
+    # of the Metacat package identifier with revisions as list for each; the purpose is to sort
+    # list of revisions to retain DataONE obsolescence chain
     for metacatObjects in objectlistiterator.ObjectListIterator(src_client):
         pid = Pid(metacatObjects.identifier.value())
         pid_count += 1
@@ -61,15 +65,27 @@ def main():
         if pid_count == 500: break
 
     key_count = 0
+
+    # For each scope.identifier, sort the list of revision values in ascending order
     for key, value in pids.iteritems():
         key_count += 1
         sorted_series = _sort_pid_series(value)
+
+
         print("(%u) %s - %s" % (key_count, key, sorted_series))
 
     return 0
 
 
 def _get_obj(pid):
+    """Return a DataONE object consisting of both data and system metadata
+
+    :param pid:
+    The persistent identifier of the DataONE object
+
+    :return:
+    The object as dictionary with data, system metadata XML, and source URL as key/value pairs
+    """
 
     obj = {}
 
