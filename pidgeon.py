@@ -4,17 +4,19 @@
 """:Mod: pidgeon.py
 
 :Synopsis:
+    Persistent Identifier Generic Editor Object Notation for managing DataONE and KNB
+    identifier notation
 
 :Author:
-  servilla
+    servilla
   
 :Created:
-  12/18/14
+    12/18/14
 """
 
 __author__ = "servilla"
 
-class Pid:
+class Pidgeon:
 
     def __init__(self, pid_str):
         self._pid_str = pid_str

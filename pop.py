@@ -1,16 +1,16 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-""":Mod: pop
+""":Mod: pop.py
 
 :Synopsis:
-To populate PASTA GMN with legacy LTER Metacat DataONE MN objects.
+    To populate PASTA GMN with legacy LTER Metacat DataONE MN objects.
 
 :Author:
-  servilla
+    servilla
   
 :Created:
-  11/21/14
+    11/21/14
 """
 from __future__ import print_function
 
@@ -18,15 +18,15 @@ __author__ = "servilla"
 
 import sys
 import pyxb
-from datetime import datetime
 import StringIO
+from datetime import datetime
 
 import d1_client.mnclient as mnclient
 import d1_client.cnclient as cnclient
 import d1_client.objectlistiterator as objectlistiterator
 import d1_common.types.generated.dataoneTypes as dataone_types
 
-
+from pidgeon import Pidgeon
 
 MN_CERT = "/Users/servilla/Certs/DataONE/urn:node:LTER.pem"
 GMN_CERT = "/Users/servilla/Certs/DataONE/gmn_local.pem"
@@ -35,7 +35,6 @@ MN_BASE_URL = "https://metacat.lternet.edu/knb/d1/mn"
 GMN_BASE_URL = "https://192.168.47.139/mn"
 DATA_DIR = "./data/"
 
-
 log_file = "./pop.log"
 err_file = "./err.log"
 pid_file = "./pid.log"
@@ -43,164 +42,172 @@ pid_file = "./pid.log"
 def main():
 
     src_client = mnclient.MemberNodeClient(base_url=MN_BASE_URL, cert_path=MN_CERT)
-    pid_count = 0
-    pids = {}
-
-    # Iterate through all object PIDs found on source MN and build dict based on scope.identifier
-    # of the Metacat package identifier with revisions as list for each; the purpose is to sort
-    # list of revisions to retain DataONE obsolescence chain
-    for metacatObjects in objectlistiterator.ObjectListIterator(src_client):
-        pid = Pid(metacatObjects.identifier.value())
-        pid_count += 1
-
-        key = pid.get_key()
-        series = pids.get(key)
-        if series is None:
-            series = [[pid.get_pid(), int(pid.get_revision())]]
-        else:
-            series.append([pid.get_pid(), int(pid.get_revision())])
-
-        pids[key] = series
-
-        if pid_count == 500: break
+    pids = _get_ordered_pid_list(src_client,10)
 
     key_count = 0
 
-    # For each scope.identifier, sort the list of revision values in ascending order
-    for key, value in pids.iteritems():
+    for pid_base, series in pids.iteritems():
         key_count += 1
-        sorted_series = _sort_pid_series(value)
+        print("(%u) %s - %s" % (key_count, pid_base, series))
 
-
-        print("(%u) %s - %s" % (key_count, key, sorted_series))
+        for pid in series:
+            _create_on_gmn(Pidgeon(pid[0]))
 
     return 0
 
 
-def _get_obj(pid):
+def _get_obj(d1_pid):
     """Return a DataONE object consisting of both data and system metadata
 
     :param pid:
-    The persistent identifier of the DataONE object
+    The DataONE pid string
 
     :return:
-    The object as dictionary with data, system metadata XML, and source URL as key/value pairs
+    Object bytes, system metadata XML, and source URL as a dictionary
     """
 
     obj = {}
 
+    # Try to get object from CN first, then MN; otherwise, raise ObjReadException
     try:
         cn_client = cnclient.CoordinatingNodeClient(base_url=CN_BASE_URL, cert_path=MN_CERT)
-        obj["data"] = cn_client.get(pid).read()
-        obj["sys_meta_xml"] = cn_client.getSystemMetadataResponse(pid).read()
+        obj["data"] = cn_client.get(d1_pid).read()
+        obj["sys_meta_xml"] = cn_client.getSystemMetadataResponse(d1_pid).read()
         obj["src"] = CN_BASE_URL
 
     except Exception as x:
 
         now = datetime.now().__str__()
-        error_msg = now + (": OBJ GET error for (%s) on %s\n" % (pid, CN_BASE_URL)) + x.message + "\n"
+        error_msg = now + (": OBJ GET error for (%s) on %s\n" % (d1_pid, CN_BASE_URL)) + x.message + "\n"
         open(err_file, mode="a").write(error_msg)
 
         try:
             mn_client = mnclient.MemberNodeClient(base_url=MN_BASE_URL, cert_path=MN_CERT)
-            obj["data"] = mn_client.get(pid).read()
-            obj["sys_meta_xml"] = mn_client.getSystemMetadataResponse(pid).read()
+            obj["data"] = mn_client.get(d1_pid).read()
+            obj["sys_meta_xml"] = mn_client.getSystemMetadataResponse(d1_pid).read()
             obj["src"] = MN_BASE_URL
 
         except Exception as x:
 
             now = datetime.now().__str__()
-            error_msg = now + (": OBJ GET error for (%s) on %s\n" % (pid, MN_BASE_URL)) + x.message + "\n"
+            error_msg = now + (": OBJ GET error for (%s) on %s\n" % (d1_pid, MN_BASE_URL)) + x.message + "\n"
             open(err_file, mode="a").write(error_msg)
 
-            raise ObjReadException(pid)
+            raise ObjReadException(d1_pid)
 
     return obj
 
 
 def _get_sys_meta(sys_meta_str):
+    """Return corrected system metadata as pyxb object
+    :param sys_meta_str:
+    Raw system metadata XML string
+
+    :return:
+    System metadata as pyxb object
+    """
+
     sys_meta_str = sys_meta_str.replace('<accessPolicy/>', '')
     sys_meta_str = sys_meta_str.replace('<blockedMemberNode/>', '')
     sys_meta_str = sys_meta_str.replace('<blockedMemberNode></blockedMemberNode>', '')
 
-    print(sys_meta_str)
+    _sys_meta_obj = dataone_types.CreateFromDocument(sys_meta_str)
 
-    return dataone_types.CreateFromDocument(sys_meta_str)
+    return _sys_meta_obj
 
 
 def _create_on_gmn(pid):
+    """Create a object on the GMN
 
-        global d1_object
+    :param d1_pid:
+    The DataONE pid
 
-        try:
-            d1_object = _get_obj(pid)
-            sys_meta = _get_sys_meta(d1_object["sys_meta_xml"])
-            data = d1_object["data"]
-            open(DATA_DIR + pid + ".dat", mode="w").write(data)
-            data_file = open(DATA_DIR + pid + ".dat", mode="rb").read()
+    :return:
+    Success status
+    """
 
-            now = datetime.now().__str__()
-            log_msg = "%s: %s, formatId: %s, size: %u, src: %s\n" % (now, pid, sys_meta.formatId,
-                                                                    sys_meta.size, d1_object["src"])
-            open(log_file, mode="a").write(log_msg)
+    d1_object = None
 
-            gmn_client = mnclient.MemberNodeClient(base_url=GMN_BASE_URL, cert_path=GMN_CERT)
-            create_response = gmn_client.create(pid, StringIO.StringIO(data_file), sys_meta)
+    try:
+        d1_object = _get_obj(pid.get_d1_pid())
+        sys_meta = _get_sys_meta(d1_object["sys_meta_xml"])
+        data = d1_object["data"]
+        open(DATA_DIR + pid + ".dat", mode="w").write(data)
+        data_file = open(DATA_DIR + pid + ".dat", mode="rb").read()
 
-        except ObjReadException:
-            now = datetime.now().__str__()
-            error_msg = "%s: %s - object not available from either CN or MN\n" % (now, pid)
-            open(err_file, mode="a").write(error_msg)
+        now = datetime.now().__str__()
+        log_msg = "%s: %s, formatId: %s, size: %u, src: %s\n" % (now, pid, sys_meta.formatId,
+                                                                 sys_meta.size, d1_object["src"])
+        open(log_file, mode="a").write(log_msg)
 
-        except pyxb.UnrecognizedDOMRootNodeError:
-            now = datetime.now().__str__()
-            error_msg = "%s: %s - pyxb parsing error\n" % (now, pid)
-            open(err_file, mode="a").write(error_msg)
-            open("./" + pid + ".xml", mode="w").write(d1_object["sys_meta_xml"])
+        #gmn_client = mnclient.MemberNodeClient(base_url=GMN_BASE_URL, cert_path=GMN_CERT)
+        #create_response = gmn_client.create(pid, StringIO.StringIO(data_file), sys_meta)
 
-        except Exception as x:
-            print(x)
-            now = datetime.now().__str__()
-            error_msg = "%s: %s - unknown exception (%s)\n" % (now, pid, x.message)
-            open(err_file, mode="a").write(error_msg)
+    except ObjReadException:
+        now = datetime.now().__str__()
+        error_msg = "%s: %s - object not available from either CN or MN\n" % (now, pid)
+        open(err_file, mode="a").write(error_msg)
 
-        return 0
+    except pyxb.UnrecognizedDOMRootNodeError:
+        now = datetime.now().__str__()
+        error_msg = "%s: %s - pyxb parsing error\n" % (now, pid)
+        open(err_file, mode="a").write(error_msg)
+        open("./" + pid + ".xml", mode="w").write(d1_object["sys_meta_xml"])
+
+    except Exception as x:
+        print(x)
+        now = datetime.now().__str__()
+        error_msg = "%s: %s - unknown exception (%s)\n" % (now, pid, x.message)
+        open(err_file, mode="a").write(error_msg)
+
+    return 0
 
 
-def _sort_pid_series(series):
-    _series = sorted(series, key=lambda rev: rev[1])
-    return _series
+def _get_ordered_pid_list(src_client, max_pids=None):
+    """Return ordered list of all source client pids
 
+    :param src_client:
+    The src_client DataONE object - see d1_client.mnclient
 
-class Pid:
+    :param max_pids=None:
+    Maximum number of pids to process
 
-    def __init__(self, pid_str):
-        self._pid_str = pid_str
-        _pid_parts = self._pid_str.split("/")
-        _pid_size = len(_pid_parts)
-        self._canonical_pid = _pid_parts[_pid_size - 1]
-        self._canonical_parts = self._canonical_pid.split(".")
-        self._scope = self._canonical_parts[0]
-        self._identifier = self._canonical_parts[1]
-        self._revision = self._canonical_parts[2]
+    :return:
+    Dictionary of package series representing pid obsolescence chains
+    """
 
-    def get_pid(self):
-        return self._pid_str
+    pid_count = 0
+    pids = {}
 
-    def get_canonical_pid(self):
-        return self._canonical_pid
+    # Build dictionary of package identifiers with revisions in non-sorted list; each
+    # entry ("scope.identifier": "revX", "revY", ...) represents a data package series
+    for metacatObjects in objectlistiterator.ObjectListIterator(src_client):
+        pid = Pidgeon(metacatObjects.identifier.value())
+        pid_count += 1
 
-    def get_scope(self):
-        return self._scope
+        key = pid.get_key()
+        series = pids.get(key)
+        if series is None:
+            series = [[pid.get_d1_pid(), int(pid.get_revision())]]
+        else:
+            series.append([pid.get_d1_pid(), int(pid.get_revision())])
 
-    def get_identifier(self):
-        return self._identifier
+        pids[key] = series
 
-    def get_revision(self):
-        return self._revision
+        if max_pids is not None:
+            if pid_count == max_pids: break
 
-    def get_key(self):
-        return self._scope + "." + self._identifier
+    key_count = 0
+
+    # Iterate through dictionary and sort list of revisions to create ordered obsolescence
+    # chain
+    for key, value in pids.iteritems():
+        key_count += 1
+        pids[key] = sorted(value, key=lambda rev: rev[1])
+
+        #print("(%u) %s - %s" % (key_count, key, sorted_series))
+
+    return pids
 
 
 class ObjReadException(Exception): pass
