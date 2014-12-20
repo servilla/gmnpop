@@ -95,6 +95,13 @@ def main():
             open(DATA_DIR + pidgeon.get_knb_pid() + ".dat", mode="w").write(obj)
             obj = open(DATA_DIR + pidgeon.get_knb_pid() + ".dat", mode="rb").read()
 
+            gmn_sys_meta = mn_sys_meta
+            gmn_sys_meta.size = cn_sys_meta.size
+            gmn_sys_meta.checksum = cn_sys_meta.checksum
+
+            print(mn_sys_meta.toxml("utf-8"))
+            print(gmn_sys_meta.toxml("utf-8"))
+            print(cn_sys_meta.toxml("utf-8"))
 
     return 0
 
