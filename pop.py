@@ -51,76 +51,89 @@ def main():
         print("(%u) %s - %s" % (key_count, pid_base, series))
 
         for pid in series:
-            _create_on_gmn(Pidgeon(pid[0]))
+
+            pidgeon = Pidgeon(pid[0])
+            d1_pid = pidgeon.get_d1_pid()
+
+            # Get object system metadata from MN
+            try:
+                mn_client = mnclient.MemberNodeClient(base_url=MN_BASE_URL, cert_path=MN_CERT)
+                mn_sys_meta = _get_sys_meta(d1_pid, mn_client)
+            except SysMetaReadException as e:
+                now = datetime.now().__str__()
+                error_msg = now + (": SYS_META READ error for %s at %s\n" % (d1_pid, MN_BASE_URL)) + e.message + "\n"
+                open(err_file, mode="a").write(error_msg)
+                break
+
+            # Get object system metadata from CN
+            try:
+                cn_client = cnclient.CoordinatingNodeClient(base_url=CN_BASE_URL, cert_path=MN_CERT)
+                cn_sys_meta = _get_sys_meta(d1_pid, cn_client)
+            except SysMetaReadException as e:
+                now = datetime.now().__str__()
+                error_msg = now + (": SYS_META READ error for %s at %s\n" % (d1_pid, CN_BASE_URL)) + e.message + "\n"
+                open(err_file, mode="a").write(error_msg)
+                break
+
+            # Get object from CN if available; otherwise, from MN
+            try:
+                cn_client = cnclient.CoordinatingNodeClient(base_url=CN_BASE_URL, cert_path=MN_CERT)
+                obj = cn_client.get(d1_pid).read()
+            except Exception as e:
+                now = datetime.now().__str__()
+                error_msg = now + (": OBJ READ error for %s at %s\n" % (d1_pid, CN_BASE_URL)) + e.message + "\n"
+                open(err_file, mode="a").write(error_msg)
+                try:
+                    mn_client = mnclient.MemberNodeClient(base_url=MN_BASE_URL, cert_path=MN_CERT)
+                    obj = mn_client.get(d1_pid).read()
+                except Exception as e:
+                    now = datetime.now().__str__()
+                    error_msg = now + (": OBJ READ error for %s at %s\n" % (d1_pid, MN_BASE_URL)) + e.message + "\n"
+                    open(err_file, mode="a").write(error_msg)
+                    break
+
+            open(DATA_DIR + pidgeon.get_knb_pid() + ".dat", mode="w").write(obj)
+            obj = open(DATA_DIR + pidgeon.get_knb_pid() + ".dat", mode="rb").read()
+
 
     return 0
 
 
-def _get_obj(d1_pid):
-    """Return a DataONE object consisting of both data and system metadata
+def _get_sys_meta(d1_pid, client):
+    """Return corrected system metadata as pyxb object
 
-    :param pid:
+    :param d1_pid:
     The DataONE pid string
 
-    :return:
-    Object bytes, system metadata XML, and source URL as a dictionary
-    """
-
-    obj = {}
-
-    # Try to get object from CN first, then MN; otherwise, raise ObjReadException
-    try:
-        cn_client = cnclient.CoordinatingNodeClient(base_url=CN_BASE_URL, cert_path=MN_CERT)
-        obj["data"] = cn_client.get(d1_pid).read()
-        obj["sys_meta_xml"] = cn_client.getSystemMetadataResponse(d1_pid).read()
-        obj["src"] = CN_BASE_URL
-
-    except Exception as x:
-
-        now = datetime.now().__str__()
-        error_msg = now + (": OBJ GET error for (%s) on %s\n" % (d1_pid, CN_BASE_URL)) + x.message + "\n"
-        open(err_file, mode="a").write(error_msg)
-
-        try:
-            mn_client = mnclient.MemberNodeClient(base_url=MN_BASE_URL, cert_path=MN_CERT)
-            obj["data"] = mn_client.get(d1_pid).read()
-            obj["sys_meta_xml"] = mn_client.getSystemMetadataResponse(d1_pid).read()
-            obj["src"] = MN_BASE_URL
-
-        except Exception as x:
-
-            now = datetime.now().__str__()
-            error_msg = now + (": OBJ GET error for (%s) on %s\n" % (d1_pid, MN_BASE_URL)) + x.message + "\n"
-            open(err_file, mode="a").write(error_msg)
-
-            raise ObjReadException(d1_pid)
-
-    return obj
-
-
-def _get_sys_meta(sys_meta_str):
-    """Return corrected system metadata as pyxb object
-    :param sys_meta_str:
-    Raw system metadata XML string
+    :param client:
+    Either the DataONE Member Node or Coordinating Node Client object
 
     :return:
     System metadata as pyxb object
     """
 
-    sys_meta_str = sys_meta_str.replace('<accessPolicy/>', '')
-    sys_meta_str = sys_meta_str.replace('<blockedMemberNode/>', '')
-    sys_meta_str = sys_meta_str.replace('<blockedMemberNode></blockedMemberNode>', '')
-
-    _sys_meta_obj = dataone_types.CreateFromDocument(sys_meta_str)
-
-    return _sys_meta_obj
+    try:
+        sys_meta_str = client.getSystemMetadataResponse(d1_pid).read()
+        sys_meta_str = sys_meta_str.replace('<accessPolicy/>', '')
+        sys_meta_str = sys_meta_str.replace('<blockedMemberNode/>', '')
+        sys_meta_str = sys_meta_str.replace('<blockedMemberNode></blockedMemberNode>', '')
+        _sys_meta_obj = dataone_types.CreateFromDocument(sys_meta_str)
+        return _sys_meta_obj
+    except pyxb.UnrecognizedDOMRootNodeError as e:
+        now = datetime.now().__str__()
+        error_msg = "%s: %s - pyxb parsing error: %s\n" % (now, d1_pid, e.message)
+        open(err_file, mode="a").write(error_msg)
+        open("./" + d1_pid + ".xml", mode="w").write(sys_meta_str)
+        raise SysMetaReadException(e.message)
+    except Exception as e:
+        raise SysMetaReadException(e.message)
 
 
 def _create_on_gmn(pid):
     """Create a object on the GMN
 
     :param d1_pid:
-    The DataONE pid
+    The DataONE pid string
 
     :return:
     Success status
@@ -132,8 +145,8 @@ def _create_on_gmn(pid):
         d1_object = _get_obj(pid.get_d1_pid())
         sys_meta = _get_sys_meta(d1_object["sys_meta_xml"])
         data = d1_object["data"]
-        open(DATA_DIR + pid + ".dat", mode="w").write(data)
-        data_file = open(DATA_DIR + pid + ".dat", mode="rb").read()
+        open(DATA_DIR + pid.get_knb_pid() + ".dat", mode="w").write(data)
+        data_file = open(DATA_DIR + pid.get_knb_pid() + ".dat", mode="rb").read()
 
         now = datetime.now().__str__()
         log_msg = "%s: %s, formatId: %s, size: %u, src: %s\n" % (now, pid, sys_meta.formatId,
@@ -211,8 +224,7 @@ def _get_ordered_pid_list(src_client, max_pids=None):
 
 
 class ObjReadException(Exception): pass
-class MNReadException(ObjReadException): pass
-class CNReadException(ObjReadException): pass
+class SysMetaReadException(Exception): pass
 
 
 if __name__ == "__main__":
