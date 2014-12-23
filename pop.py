@@ -39,6 +39,7 @@ DATA_DIR = "./data/"
 log_file = "./pop.log"
 err_file = "./err.log"
 pid_file = "./pid.log"
+size_file = "./size.log"
 
 def main():
 
@@ -142,7 +143,7 @@ def main():
                     open(err_file, mode="a").write(error_msg)
                     break
 
-        print("Total volume: %d Kb" % (size / 1024), file=sys.stdout)
+        open(size_file, mode="a").write("Total volume: %d Kb\n" % (size / 1024))
 
     return 0
 
