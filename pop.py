@@ -18,6 +18,7 @@ __author__ = "servilla"
 
 import pyxb
 import copy
+import sys
 import StringIO
 from datetime import datetime
 
@@ -141,7 +142,7 @@ def main():
                     open(err_file, mode="a").write(error_msg)
                     break
 
-        print("Total volume: %d Kb" % (size / 1024))
+        print("Total volume: %d Kb" % (size / 1024), file=sys.stdout)
 
     return 0
 
