@@ -16,8 +16,8 @@ from __future__ import print_function
 
 __author__ = "servilla"
 
-import sys
 import pyxb
+import copy
 import StringIO
 from datetime import datetime
 
@@ -42,16 +42,22 @@ pid_file = "./pid.log"
 def main():
 
     src_client = mnclient.MemberNodeClient(base_url=MN_BASE_URL, cert_path=MN_CERT)
-    pids = _get_ordered_pid_list(src_client,10)
+    pids = _get_ordered_pid_list(src_client)
 
     key_count = 0
 
+    size = 0
+
     for pid_base, series in pids.iteritems():
         key_count += 1
-        print("(%u) %s - %s" % (key_count, pid_base, series))
+        open(log_file, mode="a").write("(%u) %s - %s\n" % (key_count, pid_base, series))
+
+        pid_count = 0
+        d1_pid_old = None
 
         for pid in series:
 
+            pid_count += 1
             pidgeon = Pidgeon(pid[0])
             d1_pid = pidgeon.get_d1_pid()
 
@@ -92,16 +98,50 @@ def main():
                     open(err_file, mode="a").write(error_msg)
                     break
 
-            open(DATA_DIR + pidgeon.get_knb_pid() + ".dat", mode="w").write(obj)
-            obj = open(DATA_DIR + pidgeon.get_knb_pid() + ".dat", mode="rb").read()
+            #open(DATA_DIR + pidgeon.get_knb_pid() + ".dat", mode="w").write(obj)
+            #obj = open(DATA_DIR + pidgeon.get_knb_pid() + ".dat", mode="rb").read()
 
-            gmn_sys_meta = mn_sys_meta
+            # Merge desired system metadata from MN and CN into GMN
+            gmn_sys_meta = copy.deepcopy(mn_sys_meta)
             gmn_sys_meta.size = cn_sys_meta.size
             gmn_sys_meta.checksum = cn_sys_meta.checksum
 
-            print(mn_sys_meta.toxml("utf-8"))
-            print(gmn_sys_meta.toxml("utf-8"))
-            print(cn_sys_meta.toxml("utf-8"))
+            size += gmn_sys_meta.size
+
+            # Only for test environments
+            gmn_sys_meta.originMemberNode = "urn:node:mnTestLTER"
+            gmn_sys_meta.authoritativeMemberNode = "urn:node:mnTestLTER"
+
+            #print(mn_sys_meta.toxml("utf-8"))
+            #print(gmn_sys_meta.toxml("utf-8"))
+            #print(cn_sys_meta.toxml("utf-8"))
+
+            gmn_client = mnclient.MemberNodeClient(base_url=GMN_BASE_URL, cert_path=GMN_CERT)
+
+            if pid_count == 1:
+                try:
+                    open(log_file, mode="a").write("CREATE: %s\n" % d1_pid)
+                    #print(gmn_sys_meta.toxml("utf-8"))
+                    #create_response = gmn_client.create(d1_pid, StringIO.StringIO(obj), gmn_sys_meta)
+                    d1_pid_old = d1_pid
+                except Exception as e:
+                    now = datetime.now().__str__()
+                    error_msg = now + (": OBJ CREATE error for %s at %s\n" % (d1_pid, GMN_BASE_URL)) + e.message + "\n"
+                    open(err_file, mode="a").write(error_msg)
+                    break
+            else:
+                try:
+                    open(log_file, mode="a").write("UPDATE: %s -> %s\n" % (d1_pid_old, d1_pid))
+                    #print(gmn_sys_meta.toxml("utf-8"))
+                    #update_response = gmn_client.update(d1_pid_old, StringIO.StringIO(obj), d1_pid, gmn_sys_meta)
+                    d1_pid_old = d1_pid
+                except Exception as e:
+                    now = datetime.now().__str__()
+                    error_msg = now + (": OBJ UPDATE error for %s at %s\n" % (d1_pid, GMN_BASE_URL)) + e.message + "\n"
+                    open(err_file, mode="a").write(error_msg)
+                    break
+
+        print("Total volume: %d Mb" % (size / (1024 * 1024)))
 
     return 0
 
@@ -129,58 +169,12 @@ def _get_sys_meta(d1_pid, client):
     except pyxb.UnrecognizedDOMRootNodeError as e:
         now = datetime.now().__str__()
         error_msg = "%s: %s - pyxb parsing error: %s\n" % (now, d1_pid, e.message)
+        pidgeon = Pidgeon(d1_pid)
         open(err_file, mode="a").write(error_msg)
-        open("./" + d1_pid + ".xml", mode="w").write(sys_meta_str)
+        open("./" + pidgeon.get_knb_pid() + ".sysmeta.xml", mode="w").write(sys_meta_str)
         raise SysMetaReadException(e.message)
     except Exception as e:
         raise SysMetaReadException(e.message)
-
-
-def _create_on_gmn(pid):
-    """Create a object on the GMN
-
-    :param d1_pid:
-    The DataONE pid string
-
-    :return:
-    Success status
-    """
-
-    d1_object = None
-
-    try:
-        d1_object = _get_obj(pid.get_d1_pid())
-        sys_meta = _get_sys_meta(d1_object["sys_meta_xml"])
-        data = d1_object["data"]
-        open(DATA_DIR + pid.get_knb_pid() + ".dat", mode="w").write(data)
-        data_file = open(DATA_DIR + pid.get_knb_pid() + ".dat", mode="rb").read()
-
-        now = datetime.now().__str__()
-        log_msg = "%s: %s, formatId: %s, size: %u, src: %s\n" % (now, pid, sys_meta.formatId,
-                                                                 sys_meta.size, d1_object["src"])
-        open(log_file, mode="a").write(log_msg)
-
-        #gmn_client = mnclient.MemberNodeClient(base_url=GMN_BASE_URL, cert_path=GMN_CERT)
-        #create_response = gmn_client.create(pid, StringIO.StringIO(data_file), sys_meta)
-
-    except ObjReadException:
-        now = datetime.now().__str__()
-        error_msg = "%s: %s - object not available from either CN or MN\n" % (now, pid)
-        open(err_file, mode="a").write(error_msg)
-
-    except pyxb.UnrecognizedDOMRootNodeError:
-        now = datetime.now().__str__()
-        error_msg = "%s: %s - pyxb parsing error\n" % (now, pid)
-        open(err_file, mode="a").write(error_msg)
-        open("./" + pid + ".xml", mode="w").write(d1_object["sys_meta_xml"])
-
-    except Exception as x:
-        print(x)
-        now = datetime.now().__str__()
-        error_msg = "%s: %s - unknown exception (%s)\n" % (now, pid, x.message)
-        open(err_file, mode="a").write(error_msg)
-
-    return 0
 
 
 def _get_ordered_pid_list(src_client, max_pids=None):
