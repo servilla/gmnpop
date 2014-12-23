@@ -141,7 +141,7 @@ def main():
                     open(err_file, mode="a").write(error_msg)
                     break
 
-        print("Total volume: %d Mb" % (size / (1024 * 1024)))
+        print("Total volume: %d Kb" % (size / 1024))
 
     return 0
 
