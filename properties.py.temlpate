@@ -1,0 +1,30 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+""":Mod: properties.py
+
+:Synopsis:
+
+:Author:
+    servilla
+  
+:Created:
+    1/15/15
+"""
+
+__author__ = "servilla"
+
+MN_CERT = "PathToMemberNodeCertificate"
+GMN_CERT = "PathToGMNCertificate"
+GMN_KEY = "PathToGMNKey"
+CN_BASE_URL = "CNBaseURL"
+MN_BASE_URL = "MNBaseURL"
+GMN_BASE_URL = "GMNBaseURL"
+DATA_DIR = "PathToDataDirectory"
+
+def main():
+    return 0
+
+
+if __name__ == "__main__":
+    main()
